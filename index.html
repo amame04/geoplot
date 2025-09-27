@@ -1,0 +1,191 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Google Timeline Viewer (Leaflet)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  />
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    html {
+      height: 100vh;
+      width: 100vw;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 1rem 1rem;
+    }
+
+    #controller {
+      height: 3rem;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+
+    #map {
+      height: 100%;
+      width: 100%;
+      margin: 0;
+      padding: 0;
+    }
+  </style>
+</head>
+<body>
+  <div id="controller">
+    <span>
+      <input type="checkbox" id="specifyDatetime">
+      <input type="datetime-local" id="startDatetime">
+      -
+      <input type="datetime-local" id="endDatetime">
+    </span>
+    <input type="file" id="timelineFile" accept=".json" />
+    <button id="tokml">kml</button>
+  </div>
+  <div id="map"></div>
+
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+  <script>
+    const map = L.map('map').setView([35.6812, 139.7671], 10); // 初期表示（東京）
+    const path = [];
+    let drawPath = [];
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19,
+      attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    const layerGroup = L.layerGroup().addTo(map);
+
+    const draw = () => {
+      layerGroup.clearLayers();
+
+      if (path.length === 0) {
+        return;
+      }
+
+      if (document.getElementById('specifyDatetime').checked) {
+        const start = Date.parse(document.getElementById('startDatetime').value);
+        const end = Date.parse(document.getElementById('endDatetime').value);
+
+        drawPath = [];
+
+        path.forEach((latlng, _) => {
+          const time = latlng[2];
+          if (start < time && time < end) {
+            drawPath.push(latlng);
+          }
+        })
+      } else {
+        drawPath = path;
+      }
+
+      if (drawPath.length === 0) {
+        return;
+      }
+
+      const polyline = L.polyline(drawPath, {
+        color: 'black',
+        weight: 3
+      });
+      layerGroup.addLayer(polyline);
+
+      // 各点にマーカー追加（オプション）
+      drawPath.forEach((latlng, _) => {
+        const circle = L.circleMarker(latlng, {
+          radius: 4,
+          fillColor: 'black',
+          color: 'white',
+          weight: 1,
+          fillOpacity: 0.8
+        });
+        layerGroup.addLayer(circle);
+      });
+
+      map.fitBounds(polyline.getBounds());
+    }
+
+    document.getElementById('specifyDatetime').addEventListener('change', draw);
+    document.getElementById('startDatetime').addEventListener('change', draw);
+    document.getElementById('endDatetime').addEventListener('change', draw);
+
+    document.getElementById('timelineFile').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      const reader = new FileReader();
+
+      reader.onload = (event) => {
+        const json = JSON.parse(event.target.result);
+
+        // semanticSegments から timelinePath を抽出
+        json.semanticSegments.forEach(segment => {
+          if (!segment.timelinePath) return;
+          segment.timelinePath.forEach(entry => {
+            const point = entry.point.replace('°', '').split(',').map(v => parseFloat(v.trim()));
+            const time = Date.parse(entry.time);
+            if (point.length === 2 && time != NaN) {
+              path.push([point[0], point[1], time]);
+            }
+          });
+        });
+
+        draw();
+      };
+
+      reader.readAsText(file);
+    });
+
+    document.getElementById('tokml').addEventListener('click', () => {
+      const parser = new DOMParser();
+      const xml = parser.parseFromString(`<?xml version="1.0" encoding="UTF-8"?>
+        <kml xmlns="http://www.opengis.net/kml/2.2">
+          <Document>
+            <Style id="2">
+              <LineStyle id="3">
+                  <colorMode>normal</colorMode>
+                  <width>3</width>
+              </LineStyle>
+            </Style>
+            <Placemark id="5">
+                <name>timeline</name>
+                <styleUrl>#2</styleUrl>
+                <LineString id="4">
+                </LineString>
+            </Placemark>
+          </Document>
+        </kml>
+      `, 'application/xml');
+
+      const coordinates = xml.createElement('coordinates');
+      drawPath.forEach((latlng, _) => {
+        coordinates.textContent += latlng[1] + ',' + latlng[0] + ',0.0 '
+      })
+
+      xml.getElementsByTagName('LineString')[0].appendChild(coordinates);
+
+      const serializer = new XMLSerializer();
+      const kml = serializer.serializeToString(xml);
+
+      const blob = new Blob([kml], { type: 'application/vnd.google-earth.kml+xml' });
+      const url = URL.createObjectURL(blob);
+
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'timeline.kml';
+      a.click();
+
+      URL.revokeObjectURL(url);
+    })
+  </script>
+</body>
+</html>
